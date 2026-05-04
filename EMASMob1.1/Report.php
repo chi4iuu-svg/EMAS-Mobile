@@ -238,62 +238,127 @@ $user_name = $_SESSION['user_name'] ?? 'Student';
         }, 3000);
     }
 
+    // ── Render attachment HTML inside a bubble ────────────────────
+    function renderAttachment(path) {
+        if (!path) return '';
+        const ext = path.split('.').pop().toLowerCase();
+        const isVideo = ['mp4','webm','mov','avi'].includes(ext);
+        if (isVideo) {
+            return `<video src="${path}" controls style="max-width:100%;border-radius:10px;margin-top:6px;display:block;"></video>`;
+        }
+        return `<a href="${path}" target="_blank"><img src="${path}" style="max-width:100%;border-radius:10px;margin-top:6px;display:block;cursor:pointer;" loading="lazy"></a>`;
+    }
+
     // ── Render a single message bubble ───────────────────────────
     function renderMessage(msg) {
         const box   = document.getElementById('chat-box');
         const isBot = msg.sender_type === 'responder';
         const time  = formatTime(msg.created_at);
+        const att   = renderAttachment(msg.attachment_path);
+        const txt   = msg.message ? `<div>${escHtml(msg.message)}</div>` : '';
 
         if (isBot) {
             box.innerHTML += `
                 <div class="bubble-wrapper-bot">
                     <div class="bot-avatar"><i class="fa-solid fa-user-nurse"></i></div>
                     <div>
-                        <div class="bubble-bot">${escHtml(msg.message)}</div>
+                        <div class="bubble-bot">${txt}${att}</div>
                     </div>
                 </div>
                 <div class="timestamp ts-left">${escHtml(msg.sender_name || 'Infirmary')} · ${time}</div>`;
         } else {
             box.innerHTML += `
-                <div class="bubble-user">${escHtml(msg.message)}</div>
+                <div class="bubble-user">${txt}${att}</div>
                 <div class="timestamp ts-right">${time}</div>`;
         }
     }
 
-    // ── Send a message ────────────────────────────────────────────
+    // ── File input: show preview bar when a file is chosen ───────
+    document.getElementById('file-input').addEventListener('change', function () {
+        const existing = document.getElementById('file-preview');
+        if (existing) existing.remove();
+        if (!this.files.length) return;
+
+        const file    = this.files[0];
+        const isImage = file.type.startsWith('image/');
+        const isVideo = file.type.startsWith('video/');
+
+        const bar = document.createElement('div');
+        bar.id = 'file-preview';
+        bar.style.cssText = 'position:fixed;bottom:72px;left:50%;transform:translateX(-50%);width:92%;max-width:440px;background:#1e3a5f;border-radius:12px;padding:10px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 15px rgba(0,0,0,0.3);z-index:10;color:white;';
+
+        let thumb = '';
+        if (isImage) {
+            const url = URL.createObjectURL(file);
+            thumb = `<img src="${url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0;">`;
+        } else if (isVideo) {
+            thumb = `<div style="width:44px;height:44px;background:#0056b3;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="fa-solid fa-film" style="color:white;font-size:1.2rem;"></i></div>`;
+        } else {
+            thumb = `<div style="width:44px;height:44px;background:#0056b3;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="fa-solid fa-file" style="color:white;font-size:1.2rem;"></i></div>`;
+        }
+
+        bar.innerHTML = `
+            ${thumb}
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:0.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(file.name)}</div>
+                <div style="font-size:0.7rem;opacity:0.6;">${(file.size / 1024).toFixed(1)} KB</div>
+            </div>
+            <i class="fa-solid fa-xmark" style="cursor:pointer;opacity:0.7;padding:4px;font-size:1rem;" onclick="clearFile()"></i>`;
+
+        document.body.appendChild(bar);
+    });
+
+    function clearFile() {
+        document.getElementById('file-input').value = '';
+        const bar = document.getElementById('file-preview');
+        if (bar) bar.remove();
+    }
+
+    // ── Send a message (with optional attachment) ─────────────────
     async function sendMessage() {
-        const input = document.getElementById('msg-input');
-        const text  = input.value.trim();
-        if (!text || !sessionId || isSending) return;
+        const input     = document.getElementById('msg-input');
+        const fileInput = document.getElementById('file-input');
+        const text      = input.value.trim();
+        const hasFile   = fileInput.files.length > 0;
+
+        if (!text && !hasFile) return;  // need at least one
+        if (!sessionId || isSending) return;
 
         isSending = true;
         document.getElementById('send-btn').disabled = true;
+        const sentText = text;
         input.value = '';
+
+        // Optimistic attachment preview using local object URL
+        let localAttachmentUrl = null;
+        if (hasFile) localAttachmentUrl = URL.createObjectURL(fileInput.files[0]);
 
         const fd = new FormData();
         fd.append('session_id', sessionId);
         fd.append('sender_type', 'user');
         fd.append('sender_name', USER_NAME);
-        fd.append('message', text);
+        fd.append('message', sentText);
+        if (hasFile) fd.append('attachment', fileInput.files[0]);
 
         try {
             const res  = await fetch('api_send_message.php', { method: 'POST', body: fd });
             const data = await res.json();
             if (data.success) {
-                // Optimistically render immediately
                 renderMessage({
                     id: data.message_id,
                     sender_type: 'user',
                     sender_name: USER_NAME,
-                    message: text,
-                    created_at: null // use client time
+                    message: sentText,
+                    attachment_path: localAttachmentUrl, // show immediately from local blob
+                    created_at: null
                 });
                 lastMsgId = data.message_id;
                 scrollBottom();
+                clearFile();
             }
         } catch (e) {
             alert('Failed to send message. Please try again.');
-            input.value = text; // Restore
+            input.value = sentText;
         }
 
         isSending = false;

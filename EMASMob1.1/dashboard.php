@@ -382,6 +382,10 @@
             <div class="messages-area" id="messages-area"></div>
             <div class="input-bar">
                 <input type="text" class="dash-input" id="staff-input" placeholder="Type your response..." autocomplete="off">
+                <label id="staff-file-label" for="staff-file-input" title="" style="cursor:pointer;color:var(--muted);font-size:1.1rem;padding:4px 6px;transition:color 0.2s;" title="Attach image or video">
+                    <i class="fa-solid fa-paperclip"></i>
+                </label>
+                <input type="file" id="staff-file-input" accept="image/*,video/*" style="display:none;">
                 <button class="dash-send" id="staff-send" onclick="sendStaffMessage()">
                     <i class="fa-solid fa-paper-plane"></i> Send
                 </button>
@@ -499,33 +503,75 @@
         }, 3000);
     }
 
+    // ── Render attachment HTML inside a bubble ────────────────────
+    function renderAttachment(path) {
+        if (!path) return '';
+        const ext = path.split('.').pop().toLowerCase();
+        const isVideo = ['mp4','webm','mov','avi'].includes(ext);
+        if (isVideo) {
+            return `<video src="${path}" controls style="max-width:100%;border-radius:8px;margin-top:6px;display:block;"></video>`;
+        }
+        return `<a href="${path}" target="_blank"><img src="${path}" style="max-width:100%;border-radius:8px;margin-top:6px;display:block;cursor:pointer;" loading="lazy"></a>`;
+    }
+
     // ── Render bubble ─────────────────────────────────────────────
     function renderBubble(msg) {
-        const area     = document.getElementById('messages-area');
-        const isStaff  = msg.sender_type === 'responder';
-        const time     = formatTime(msg.created_at);
+        const area    = document.getElementById('messages-area');
+        const isStaff = msg.sender_type === 'responder';
+        const time    = formatTime(msg.created_at);
+        const att     = renderAttachment(msg.attachment_path);
+        const txt     = msg.message ? `<div>${escHtml(msg.message)}</div>` : '';
 
         area.innerHTML += `
             <div class="msg-row ${isStaff ? 'from-staff' : 'from-user'}">
-                <div class="bubble ${isStaff ? 'bubble-staff-dash' : 'bubble-user-dash'}">${escHtml(msg.message)}</div>
+                <div class="bubble ${isStaff ? 'bubble-staff-dash' : 'bubble-user-dash'}">${txt}${att}</div>
                 <div class="msg-meta">${escHtml(isStaff ? 'You' : (msg.sender_name || 'Student'))} · ${time}</div>
             </div>`;
     }
 
+    // ── Staff file input change ───────────────────────────────────
+    document.getElementById('staff-file-input').addEventListener('change', function () {
+        const label = document.getElementById('staff-file-label');
+        if (this.files.length) {
+            label.style.color = '#60a5fa';
+            label.title = this.files[0].name;
+        } else {
+            label.style.color = '';
+            label.title = '';
+        }
+    });
+
+    function clearStaffFile() {
+        const fi = document.getElementById('staff-file-input');
+        fi.value = '';
+        const label = document.getElementById('staff-file-label');
+        label.style.color = '';
+        label.title = '';
+    }
+
     // ── Send staff message ────────────────────────────────────────
     async function sendStaffMessage() {
-        const input = document.getElementById('staff-input');
-        const text  = input.value.trim();
-        if (!text || !activeSession) return;
+        const input     = document.getElementById('staff-input');
+        const fileInput = document.getElementById('staff-file-input');
+        const text      = input.value.trim();
+        const hasFile   = fileInput.files.length > 0;
+
+        if (!text && !hasFile) return;
+        if (!activeSession) return;
 
         document.getElementById('staff-send').disabled = true;
+        const sentText = text;
         input.value = '';
+
+        let localAttachmentUrl = null;
+        if (hasFile) localAttachmentUrl = URL.createObjectURL(fileInput.files[0]);
 
         const fd = new FormData();
         fd.append('session_id', activeSession);
         fd.append('sender_type', 'responder');
         fd.append('sender_name', STAFF_NAME);
-        fd.append('message', text);
+        fd.append('message', sentText);
+        if (hasFile) fd.append('attachment', fileInput.files[0]);
 
         try {
             const res  = await fetch('api_send_message.php', { method: 'POST', body: fd });
@@ -535,15 +581,17 @@
                     id: data.message_id,
                     sender_type: 'responder',
                     sender_name: STAFF_NAME,
-                    message: text,
+                    message: sentText,
+                    attachment_path: localAttachmentUrl,
                     created_at: null // use client time
                 });
                 sessions[activeSession].lastMsgId = data.message_id;
                 scrollBottom();
+                clearStaffFile();
             }
         } catch (e) {
             alert('Failed to send. Check your connection.');
-            input.value = text;
+            input.value = sentText;
         }
 
         document.getElementById('staff-send').disabled = false;
